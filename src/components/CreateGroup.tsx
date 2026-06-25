@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Camera, ChevronRight, Plus, ArrowLeft } from "lucide-react";
+import { Camera, ChevronRight, Plus, ArrowLeft, Loader2 } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 
 const AVATAR_OPTIONS = [
@@ -13,7 +13,8 @@ export default function CreateGroup() {
   const { addGroup, groups, setActiveView } = useAppContext();
   
   const [groupName, setGroupName] = useState("");
-  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // State for members
   const [invitedMembers, setInvitedMembers] = useState<string[]>([]);
   const [newMemberName, setNewMemberName] = useState("");
@@ -41,14 +42,17 @@ export default function CreateGroup() {
     setInvitedMembers(invitedMembers.filter((name) => name !== nameToRemove));
   };
 
-  const handleDone = () => {
+  const handleDone = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     const allMembers = ["You", ...invitedMembers];
-    addGroup({
+    await addGroup({
       id: "group_" + Date.now(),
       name: groupName.trim(),
       avatar: selectedAvatar,
       members: allMembers,
     });
+    setIsSubmitting(false);
   };
 
   return (
@@ -70,10 +74,12 @@ export default function CreateGroup() {
         <div className="header-actions">
           <button 
             className="btn-done" 
-            disabled={!groupName.trim()}
+            disabled={!groupName.trim() || isSubmitting}
             onClick={handleDone}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-            Done
+            {isSubmitting ? <Loader2 size={16} style={{ animation: 'spin 0.8s linear infinite' }} /> : null}
+            {isSubmitting ? 'Saving...' : 'Done'}
           </button>
         </div>
       </header>
