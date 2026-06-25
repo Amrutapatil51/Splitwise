@@ -3,6 +3,7 @@ export interface Group {
   name: string;
   avatar: string;
   members: string[];
+  upiIds?: Record<string, string>;
 }
 
 export interface Split {
@@ -26,4 +27,14 @@ export interface Transaction {
   from: string;
   to: string;
   amount: number;
+}
+
+export interface Invitation {
+  id: string;
+  groupId: string;
+  groupName: string;
+  groupAvatar: string;
+  email: string;
+  status: 'pending' | 'accepted' | 'declined';
+  createdAt: string;
 }

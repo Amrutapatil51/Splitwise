@@ -2,18 +2,70 @@
 
 import { useState } from "react";
 import { useAppContext } from "../context/AppContext";
-import { calculateNetBalances } from "../utils/debtMath";
+import { calculateNetBalances, simplifyDebts } from "../utils/debtMath";
 import { Search, Trash2, Users, UserPlus } from "lucide-react";
 import AddMemberModal from "./AddMemberModal";
+import { buildUpiUri } from "../utils/payment";
+import QrModal from "./QrModal";
 
 export default function Dashboard() {
-  const { groups, expenses, activeGroupId, deleteExpense, deleteGroup, setActiveView } = useAppContext();
+  const { groups, expenses, activeGroupId, deleteExpense, deleteGroup, setActiveView, updateMemberUpiId, recordRepayment } = useAppContext();
 
   const [activeSubTab, setActiveSubTab] = useState("All");
   const [expenseFilter, setExpenseFilter] = useState("All expenses");
   const [searchQuery, setSearchQuery] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+
+  // UPI / QR state
+  const [upiFormMember, setUpiFormMember] = useState<string | null>(null);
+  const [upiInput, setUpiInput] = useState("");
+  const [upiSaving, setUpiSaving] = useState(false);
+  const [upiError, setUpiError] = useState("");
+  const [qrModal, setQrModal] = useState<{
+    upiUri: string;
+    amount: number;
+    payeeName: string;
+  } | null>(null);
+
+  const UPI_REGEX = /^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/;
+
+  const handleGenerateQr = (creditorName: string, netBalance: number) => {
+    const upiId = group?.upiIds?.[creditorName];
+
+    if (upiId) {
+      const uri = buildUpiUri(upiId, creditorName, Math.abs(netBalance), `Splitwisely: ${group.name}`);
+      setQrModal({ upiUri: uri, amount: Math.abs(netBalance), payeeName: creditorName });
+    } else {
+      setUpiFormMember(creditorName);
+      setUpiInput("");
+      setUpiError("");
+    }
+  };
+
+  const handleUpiSubmit = async (creditorName: string, netBalance: number) => {
+    if (!UPI_REGEX.test(upiInput.trim())) {
+      setUpiError("Enter a valid UPI ID (e.g. name@upi)");
+      return;
+    }
+
+    setUpiSaving(true);
+    setUpiError("");
+    const result = await updateMemberUpiId(group!.id, creditorName, upiInput.trim());
+
+    if (!result.success) {
+      setUpiError(result.error ?? "Failed to save UPI ID. Try again.");
+      setUpiSaving(false);
+      return;
+    }
+
+    const uri = buildUpiUri(upiInput.trim(), creditorName, Math.abs(netBalance), `Splitwisely: ${group!.name}`);
+    setQrModal({ upiUri: uri, amount: Math.abs(netBalance), payeeName: creditorName });
+
+    setUpiFormMember(null);
+    setUpiInput("");
+    setUpiSaving(false);
+  };
 
   const group = groups.find((g) => g.id === activeGroupId);
 
@@ -24,6 +76,7 @@ export default function Dashboard() {
 
   // Calculate balances
   const netBalances = calculateNetBalances(group, groupExpenses);
+  const simplifiedTransactions = simplifyDebts(netBalances);
 
   // Filter expenses
   const filteredExpenses = groupExpenses
@@ -45,11 +98,35 @@ export default function Dashboard() {
   // Filter members based on activeSubTab
   const displayedMembers = group.members
     .filter((m) => m !== "You")
-    .filter((member) => {
-      const net = netBalances[member] || 0;
-      if (activeSubTab === "You owe") return net > 0;
-      if (activeSubTab === "You paid") return net < 0;
-      if (activeSubTab === "Settled up") return net === 0;
+    .map((member) => {
+      const debtorTx = simplifiedTransactions.find((t) => t.from === member);
+      const youOweTx = simplifiedTransactions.find((t) => t.from === "You" && t.to === member);
+
+      let oweText = "All settled up ✓";
+      let netRelation = 0;
+
+      if (youOweTx) {
+        oweText = `You owe ₹${youOweTx.amount.toFixed(2)}`;
+        netRelation = youOweTx.amount;
+      } else if (debtorTx) {
+        if (debtorTx.to === "You") {
+          oweText = `Owes you ₹${debtorTx.amount.toFixed(2)}`;
+          netRelation = -debtorTx.amount;
+        } else {
+          oweText = `Owes ₹${debtorTx.amount.toFixed(2)} to ${debtorTx.to}`;
+          netRelation = 0;
+        }
+      } else if ((netBalances[member] || 0) > 0.01) {
+        oweText = `Gets back ₹${netBalances[member].toFixed(2)}`;
+        netRelation = 0;
+      }
+
+      return { member, oweText, netRelation };
+    })
+    .filter(({ netRelation }) => {
+      if (activeSubTab === "You owe") return netRelation > 0;
+      if (activeSubTab === "You paid") return netRelation < 0;
+      if (activeSubTab === "Settled up") return netRelation === 0;
       return true; // "All"
     });
 
@@ -163,34 +240,80 @@ export default function Dashboard() {
           {displayedMembers.length === 0 ? (
             <p style={{ color: "var(--text-muted)", fontSize: "14px" }}>No members match this filter.</p>
           ) : (
-            displayedMembers.map((member) => {
-              const net = netBalances[member] || 0;
-              const oweText =
-                net > 0
-                  ? `You owe ₹${Math.abs(net).toFixed(2)}`
-                  : net < 0
-                  ? `Owes you ₹${Math.abs(net).toFixed(2)}`
-                  : "All settled up ✓";
-
+            displayedMembers.map(({ member, oweText, netRelation }) => {
               return (
-                <div key={member} className="balance-item">
-                  <div className="avatar-circle">{member.charAt(0).toUpperCase()}</div>
-                  <div className="balance-info">
-                    <span className="balance-name">{member}</span>
-                    <span
-                      className="balance-desc"
-                      style={{
-                        color:
-                          net > 0
-                            ? "var(--danger)"
-                            : net < 0
-                            ? "var(--success)"
-                            : "var(--text-muted)",
-                      }}
-                    >
-                      {oweText}
-                    </span>
+                <div key={member} className="balance-item" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", width: "100%" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <div className="avatar-circle">{member.charAt(0).toUpperCase()}</div>
+                    <div className="balance-info">
+                      <span className="balance-name">{member}</span>
+                      <span
+                        className="balance-desc"
+                        style={{
+                          color:
+                            netRelation > 0
+                              ? "var(--danger)"
+                              : netRelation < 0
+                              ? "var(--success)"
+                              : "var(--text-muted)",
+                        }}
+                      >
+                        {oweText}
+                      </span>
+                    </div>
                   </div>
+
+                  {/* Generate QR button — only shown when you owe this person (netRelation > 0) */}
+                  {netRelation > 0 && upiFormMember !== member && (
+                    <button
+                      className="btn-done"
+                      style={{ padding: '6px 14px', fontSize: '12px', marginLeft: 'auto' }}
+                      onClick={() => handleGenerateQr(member, netRelation)}
+                    >
+                      Generate QR
+                    </button>
+                  )}
+
+                  {/* Inline UPI form — shown when this member's form is open */}
+                  {upiFormMember === member && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginLeft: 'auto', maxWidth: '240px' }}>
+                      <input
+                        type="text"
+                        placeholder="e.g. name@upi"
+                        value={upiInput}
+                        onChange={(e) => setUpiInput(e.target.value)}
+                        disabled={upiSaving}
+                        autoFocus
+                        style={{
+                          padding: "6px 10px",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-md)",
+                          fontSize: "12px",
+                          fontFamily: "inherit"
+                        }}
+                      />
+                      {upiError && (
+                        <span style={{ color: 'var(--danger)', fontSize: '11px' }}>{upiError}</span>
+                      )}
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: "flex-end" }}>
+                        <button
+                          className="btn-done"
+                          style={{ padding: '4px 10px', fontSize: '11px' }}
+                          onClick={() => handleUpiSubmit(member, netRelation)}
+                          disabled={upiSaving}
+                        >
+                          {upiSaving ? 'Saving…' : 'Save & QR'}
+                        </button>
+                        <button
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}
+                          onClick={() => { setUpiFormMember(null); setUpiError(""); }}
+                          disabled={upiSaving}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })
@@ -263,6 +386,17 @@ export default function Dashboard() {
       </div>
       {showAddMemberModal && (
         <AddMemberModal onClose={() => setShowAddMemberModal(false)} />
+      )}
+      {qrModal && (
+        <QrModal
+          upiUri={qrModal.upiUri}
+          amount={qrModal.amount}
+          payeeName={qrModal.payeeName}
+          onClose={() => setQrModal(null)}
+          onSettle={async (refNo) => {
+            await recordRepayment(group!.id, "You", qrModal.payeeName, qrModal.amount, refNo);
+          }}
+        />
       )}
     </>
   );

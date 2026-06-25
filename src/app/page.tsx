@@ -6,6 +6,7 @@ import CreateGroup from "../components/CreateGroup";
 import Dashboard from "../components/Dashboard";
 import AddExpense from "../components/AddExpense";
 import SettleUpModal from "../components/SettleUpModal";
+import PendingInvitations from "../components/PendingInvitations";
 import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -152,6 +153,7 @@ function SidebarLayout({ children }: { children: React.ReactNode }) {
 
       {/* Main Content Area */}
       <main className="main-content">
+        <PendingInvitations />
         {children}
       </main>
 

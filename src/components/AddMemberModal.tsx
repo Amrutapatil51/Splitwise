@@ -9,34 +9,46 @@ interface AddMemberModalProps {
 }
 
 export default function AddMemberModal({ onClose }: AddMemberModalProps) {
-  const { groups, activeGroupId, updateGroupMembers } = useAppContext();
+  const { groups, activeGroupId, inviteMember } = useAppContext();
   const [newMember, setNewMember] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const group = groups.find((g) => g.id === activeGroupId);
   if (!group) return null;
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = newMember.trim();
+    const trimmed = newMember.trim().toLowerCase();
     if (!trimmed) return;
 
-    if (group.members.some((m) => m.toLowerCase() === trimmed.toLowerCase())) {
-      setError("This member is already in the group!");
+    if (!/^[\w.\-]+@[\w.\-]+\.[a-zA-Z]{2,10}$/.test(trimmed)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    if (group.members.some((m) => m.toLowerCase() === trimmed)) {
+      setError("This user is already a member of this group!");
       return;
     }
 
     setIsSubmitting(true);
     setError(null);
     try {
-      const updatedMembers = [...group.members, trimmed];
-      await updateGroupMembers(group.id, updatedMembers);
-      setNewMember("");
-      onClose();
+      const result = await inviteMember(group.id, trimmed);
+      if (result.success) {
+        setSuccessMsg("Invitation sent successfully!");
+        setNewMember("");
+        setTimeout(() => {
+          onClose();
+        }, 1500);
+      } else {
+        setError(result.error ?? "Failed to send invitation. Try again.");
+      }
     } catch (err) {
       console.error(err);
-      setError("Failed to add member. Please try again.");
+      setError("Failed to send invitation. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -69,13 +81,13 @@ export default function AddMemberModal({ onClose }: AddMemberModalProps) {
 
           <form onSubmit={handleAddMember} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div className="form-group">
-              <label className="form-label" htmlFor="new-member-input">Member Name</label>
+              <label className="form-label" htmlFor="new-member-input">Member Email</label>
               <div style={{ display: "flex", gap: "8px" }}>
                 <input
                   id="new-member-input"
-                  type="text"
+                  type="email"
                   className="add-member-input"
-                  placeholder="Enter name (e.g. John)"
+                  placeholder="e.g. friend@gmail.com"
                   value={newMember}
                   onChange={(e) => {
                     setNewMember(e.target.value);
@@ -112,6 +124,12 @@ export default function AddMemberModal({ onClose }: AddMemberModalProps) {
             {error && (
               <p style={{ color: "var(--danger)", fontSize: "13px", margin: 0 }}>
                 {error}
+              </p>
+            )}
+
+            {successMsg && (
+              <p style={{ color: "var(--success)", fontSize: "13px", margin: 0, fontWeight: 500 }}>
+                {successMsg}
               </p>
             )}
 

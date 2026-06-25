@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useTransition } from "react";
-import { Group, Expense, ViewType } from "../types";
+import { Group, Expense, ViewType, Invitation } from "../types";
 import * as Actions from "../app/actions";
 
 interface AppContextProps {
@@ -17,8 +17,14 @@ interface AppContextProps {
   deleteExpense: (id: string) => Promise<void>;
   deleteGroup: (id: string) => Promise<void>;
   updateGroupMembers: (groupId: string, newMembers: string[]) => Promise<void>;
-  recordRepayment: (groupId: string, debtor: string, creditor: string, amount: number) => Promise<void>;
+  updateMemberUpiId: (groupId: string, memberName: string, upiId: string) => Promise<{ success: boolean; error?: string }>;
+  recordRepayment: (groupId: string, debtor: string, creditor: string, amount: number, upiRef?: string) => Promise<void>;
   refreshExpenses: (groupId: string) => Promise<void>;
+  
+  pendingInvitations: Invitation[];
+  inviteMember: (groupId: string, email: string) => Promise<{ success: boolean; error?: string }>;
+  respondToInvitation: (inviteId: string, accept: boolean) => Promise<{ success: boolean; error?: string }>;
+  refreshPendingInvitations: () => Promise<void>;
 
   setActiveGroupId: (id: string | null) => void;
   setActiveView: (view: ViewType) => void;
@@ -47,6 +53,7 @@ function saveToLS(groups: Group[], expenses: Expense[]) {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [groups, setGroups] = useState<Group[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ViewType>("create-group");
   const [isInitialized, setIsInitialized] = useState(false);
@@ -79,8 +86,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: g.name,
             avatar: g.avatar,
             members: Array.isArray(g.members) ? g.members : JSON.parse(g.members),
+            upiIds: g.upiIds ?? {},
           }));
           setGroups(mapped);
+          
+          const inviteResult = await Actions.getPendingInvitations();
+          if (!inviteResult.error) {
+            setPendingInvitations(inviteResult.invitations as any);
+          }
+
           if (mapped.length > 0) {
             setActiveGroupId(mapped[0].id);
             setActiveView("dashboard");
@@ -212,7 +226,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     groupId: string,
     debtor: string,
     creditor: string,
-    amount: number
+    amount: number,
+    upiRef?: string
   ) => {
     const group = groups.find((g) => g.id === groupId);
     if (!group) return;
@@ -221,10 +236,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     group.members.forEach((m) => (splits[m] = 0));
     splits[creditor] = amount;
 
+    const description = upiRef 
+      ? `Settled: ${debtor} paid ${creditor} (UPI Ref: ${upiRef})`
+      : `Settled: ${debtor} paid ${creditor}`;
+
     const repayment: Expense = {
       id: "exp_" + Date.now(),
       groupId,
-      description: `Settled: ${debtor} paid ${creditor}`,
+      description,
       amount,
       paidBy: debtor,
       splitType: "custom",
@@ -247,6 +266,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   }, [dbConfigured]);
 
+  const updateMemberUpiId = useCallback(async (
+    groupId: string,
+    memberName: string,
+    upiId: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (dbConfigured) {
+      const result = await Actions.updateMemberUpiId(groupId, memberName, upiId);
+      if (!result.success) {
+        return result;
+      }
+    }
+    // Optimistic local update
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === groupId
+          ? { ...g, upiIds: { ...(g.upiIds ?? {}), [memberName]: upiId } }
+          : g
+      )
+    );
+    return { success: true };
+  }, [dbConfigured]);
+
+  const refreshPendingInvitations = useCallback(async () => {
+    if (!dbConfigured) return;
+    try {
+      const inviteResult = await Actions.getPendingInvitations();
+      if (!inviteResult.error) {
+        setPendingInvitations(inviteResult.invitations as any);
+      }
+    } catch (err) {
+      console.error("Error refreshing pending invitations:", err);
+    }
+  }, [dbConfigured]);
+
+  const inviteMember = useCallback(async (groupId: string, email: string): Promise<{ success: boolean; error?: string }> => {
+    if (dbConfigured) {
+      const result = await Actions.inviteMember(groupId, email);
+      return result;
+    } else {
+      const group = groups.find(g => g.id === groupId);
+      if (group) {
+        const updatedMembers = Array.from(new Set([...group.members, email]));
+        setGroups((prev) =>
+          prev.map((g) => (g.id === groupId ? { ...g, members: updatedMembers } : g))
+        );
+      }
+      return { success: true };
+    }
+  }, [dbConfigured, groups]);
+
+  const respondToInvitation = useCallback(async (inviteId: string, accept: boolean): Promise<{ success: boolean; error?: string }> => {
+    if (dbConfigured) {
+      const result = await Actions.respondToInvitation(inviteId, accept);
+      if (result.success) {
+        const groupsResult = await Actions.getGroups();
+        if (!groupsResult.error) {
+          const mapped: Group[] = (groupsResult.groups as any[]).map((g: any) => ({
+            id: g.id,
+            name: g.name,
+            avatar: g.avatar,
+            members: Array.isArray(g.members) ? g.members : JSON.parse(g.members),
+            upiIds: g.upiIds ?? {},
+          }));
+          setGroups(mapped);
+          if (mapped.length > 0 && !activeGroupId) {
+            setActiveGroupId(mapped[0].id);
+            setActiveView("dashboard");
+          }
+        }
+        await refreshPendingInvitations();
+      }
+      return result;
+    }
+    return { success: true };
+  }, [dbConfigured, activeGroupId, refreshPendingInvitations]);
+
   if (!isInitialized) return null;
 
   return (
@@ -263,8 +358,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteExpense,
         deleteGroup,
         updateGroupMembers,
+        updateMemberUpiId,
         recordRepayment,
         refreshExpenses,
+        pendingInvitations,
+        inviteMember,
+        respondToInvitation,
+        refreshPendingInvitations,
         setActiveGroupId,
         setActiveView,
       }}

@@ -26,31 +26,35 @@ export default function CreateGroup() {
 
   const handleAddMember = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const name = newMemberName.trim();
-    if (!name) return;
+    const email = newMemberName.trim();
+    if (!email) return;
     
-    if (invitedMembers.includes(name)) {
-      alert("This member is already added!");
+    if (!/^[\w.\-]+@[\w.\-]+\.[a-zA-Z]{2,10}$/.test(email)) {
+      alert("Please enter a valid email address.");
       return;
     }
     
-    setInvitedMembers([...invitedMembers, name]);
+    if (invitedMembers.includes(email)) {
+      alert("This email is already added!");
+      return;
+    }
+    
+    setInvitedMembers([...invitedMembers, email]);
     setNewMemberName("");
   };
 
-  const handleRemoveMember = (nameToRemove: string) => {
-    setInvitedMembers(invitedMembers.filter((name) => name !== nameToRemove));
+  const handleRemoveMember = (emailToRemove: string) => {
+    setInvitedMembers(invitedMembers.filter((email) => email !== emailToRemove));
   };
 
   const handleDone = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
-    const allMembers = ["You", ...invitedMembers];
     await addGroup({
       id: "group_" + Date.now(),
       name: groupName.trim(),
       avatar: selectedAvatar,
-      members: allMembers,
+      members: invitedMembers,
     });
     setIsSubmitting(false);
   };
@@ -142,9 +146,9 @@ export default function CreateGroup() {
                 
                 <form className="add-member-form" onSubmit={handleAddMember}>
                   <input 
-                    type="text" 
+                    type="email" 
                     className="add-member-input" 
-                    placeholder="Friend's name (e.g. Alice)" 
+                    placeholder="Friend's email (e.g. alice@gmail.com)" 
                     autoComplete="off"
                     value={newMemberName}
                     onChange={(e) => setNewMemberName(e.target.value)}
